@@ -1,0 +1,21 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: An AWS Serverless Specification template describing your function.
+Resources:
+  SearchHandler:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Handler: lumigo_tracer._handler
+      Runtime: python3.7
+      CodeUri: .
+      Description: ''
+      MemorySize: 128
+      Timeout: 15
+      Role: 'arn:aws:iam::REDACTED:role/service-role/LumigoRole'
+      Environment:
+        Variables:
+          LUMIGO_ORIGINAL_HANDLER: lambda_function.lambda_handler
+          LUMIGO_TRACER_TOKEN: REDACTED
+      Layers:
+        - >-
+          arn:aws:lambda:ap-southeast-1:REDACTED:layer:lumigo-python-tracer:224

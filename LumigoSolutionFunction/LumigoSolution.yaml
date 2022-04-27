@@ -1,0 +1,37 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: 'AWS::Serverless-2016-10-31'
+Description: >-
+  A simple backend (read/write to DynamoDB) with a RESTful API endpoint using
+  Amazon API Gateway.
+Resources:
+  LumigoSolution:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      Handler: lumigo_tracer._handler
+      Runtime: python3.7
+      CodeUri: .
+      Description: >-
+        A simple backend (read/write to DynamoDB) with a RESTful API endpoint
+        using Amazon API Gateway.
+      MemorySize: 512
+      Timeout: 10
+      Role: 'arn:aws:iam::REDACTED:role/service-role/LumigoRole'
+      Events:
+        Api1:
+          Type: Api
+          Properties:
+            Path: /discordevent
+            Method: POST
+      Environment:
+        Variables:
+          BotSecret: REDACTED
+          LUMIGO_ORIGINAL_HANDLER: REDACTED
+          LUMIGO_TRACER_TOKEN: REDACTED
+          PUBLIC_KEY: REDACTED
+          SyncHandlerARN: 'arn:aws:lambda:ap-southeast-1:REDACTED:function:DataHandler'
+      Tags:
+        'lambda-console:blueprint': microservice-http-endpoint-python
+      Layers:
+        - 'arn:aws:lambda:ap-southeast-1:REDACTED:layer:pyNACL:1'
+        - >-
+          arn:aws:lambda:ap-southeast-1:REDACTED:layer:lumigo-python-tracer:224
