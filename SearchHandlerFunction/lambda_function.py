@@ -1,29 +1,41 @@
 import json
 import boto3
 import time
-import requests
+import urllib3
+import psycopg2
+import psycopg2.extras
+
+config = {
+    'host': 'us-east-1.0fd7b714-461d-47fb-9b73-660e507d3bb0.aws.ybdb.io',
+    'port': '5433',
+    'dbName': 'yugabyte',
+    'dbUser': 'admin',
+    'dbPassword': 'epRTlf168sjCaXzzDQg9FrmUhkvBGe',
+    'sslMode': '',
+    'sslRootCert': ''
+}
 
 dynamodb = boto3.resource('dynamodb')
 
 def lambda_handler(event, context):
-    table = dynamodb.Table('DocSearch')
-
-    get_key = table.scan(
-        ProjectionExpression = "keyword"
-    )
     query = event["query"].strip().lower()
-    results = []
-    for i in get_key["Items"]:
-        if query in i["keyword"].strip().lower():
-            info = table.get_item(
-                Key={
-                    "keyword": i["keyword"]
-                }
-            )
-            results.append(info["Item"])
+
+    connection = psycopg2.connect(
+        config
+    )
+    cursor = connection.cursor()
+
+    query_sql = """
+    SELECT f.* FROM files f
+    JOIN file_keywords fk ON f.id = fk.file_id
+    JOIN keywords k ON fk.keyword_id = k.id
+    WHERE k.keyword = %s
+    """
+    cursor.execute(query_sql, (query,))
+    results = cursor.fetchall()
+
+    connection.close()
     all_occ = []
-    # print(results)
-    
     for i in results:
       for j in i["files"]:
         x = {
@@ -84,7 +96,8 @@ def lambda_handler(event, context):
                 }
             ]
         }
-    r = requests.post(url, headers = event["headers"], json = message_text)
+    http = urllib3.PoolManager()
+    r = http.requests("POST",url, headers = event["headers"], json = message_text)
     
     return {
         'statusCode': 200

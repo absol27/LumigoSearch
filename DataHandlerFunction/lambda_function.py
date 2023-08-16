@@ -1,7 +1,57 @@
 import json
 import boto3
-import requests
+import urllib3
 import time
+import psycopg2
+import psycopg2.extras
+
+config = {
+    'host': 'us-east-1.0fd7b714-461d-47fb-9b73-660e507d3bb0.aws.ybdb.io',
+    'port': '5433',
+    'dbName': 'yugabyte',
+    'dbUser': 'admin',
+    'dbPassword': 'epRTlf168sjCaXzzDQg9FrmUhkvBGe',
+    'sslMode': '',
+    'sslRootCert': ''
+}
+
+
+def create_database(yb):
+    try:
+        with yb.cursor() as yb_cursor:
+            yb_cursor.execute("DROP TABLE IF EXISTS files")
+            yb_cursor.execute("DROP TABLE IF EXISTS keywords")
+            yb_cursor.execute("DROP TABLE IF EXISTS file_keywords")
+            create_table_stmt = """
+                    CREATE TABLE files (
+                    id SERIAL PRIMARY KEY,
+                    channel_id VARCHAR(255) NOT NULL,
+                    message_id VARCHAR(255),
+                    attachment_id VARCHAR(255),
+                    timestamp VARCHAR(255),
+                    filename VARCHAR(255) NOT NULL,
+                    author VARCHAR(255)
+                );
+                
+                CREATE TABLE keywords (
+                    id SERIAL PRIMARY KEY,
+                    keyword VARCHAR(255) NOT NULL
+                );
+                
+                CREATE TABLE file_keywords (
+                    file_id INT REFERENCES files(id),
+                    keyword_id INT REFERENCES keywords(id),
+                    PRIMARY KEY (file_id, keyword_id)
+                );
+            """
+            yb_cursor.execute(create_table_stmt)
+        yb.commit()
+    except Exception as e:
+        print("Exception while creating tables")
+        print(e)
+        exit(1)
+
+    print(">>>> Successfully created tables.")
 
 textract = boto3.client('textract')
 comprehend = boto3.client('comprehend')
@@ -54,13 +104,31 @@ def JobResults(jobId):
 
 
 def lambda_handler(event, context):
+    sqs = boto3.client('sqs')
+    queue_url = 'https://sqs.us-east-2.amazonaws.com/673135797624/discordbot'
+
+    try:
+        response = sqs.receive_message(
+            QueueUrl=queue_url,
+            MaxNumberOfMessages=1,  # Adjust as needed
+            WaitTimeSeconds=20  # Adjust as needed
+        )
+    except Exception as e:
+        print("Error:", str(e))
     # TODO implement
-    event1 = json.loads(event["Records"][0]["body"])
-    file = requests.get(event1['attachment_url'])
+    message = json.loads(response["Messages"][0]["Body"])
+    print(message)
+    event1 = json.loads(message["Message"])
+    http = urllib3.PoolManager()
+    file = http.request("GET", event1['attachment_url'])
     post_url = event1["presigned_s3"]
-    http_resp = requests.post(post_url["url"], data = post_url["fields"], files = {'file': file.content})
-    
-    # Function invokes
+    fields = post_url["fields"]  # Additional form fields
+    fields["file"] = ("", file.data)
+    # http_resp = http.requests("POST", post_url["url"], data = post_url["fields"], files = {'file': file.data})
+    post_response = http.request(
+    'POST',
+    post_url["url"],
+    fields = fields)
     jobId = InvokeTextDetectJob('discordattachments', event1["s3_key"])#'879399976512421903_968163281585979402_968163281393025085.pdf')
     print("Started job with id: {}".format(jobId))
     pdf_text = ""
@@ -75,43 +143,52 @@ def lambda_handler(event, context):
         Text = pdf_text,
         LanguageCode = 'en'
     )
-    for j in entities["Entities"]:
-        if j['Score'] > 0.75:
-            table = dynamodb.Table('DocSearch')
-            curr_msg = event1["s3_key"].split('_')
-            get_key = table.get_item(
-                Key={
-                    "keyword": j["Text"]
-                }
-            )
-            newentry = {
-                'channelid': curr_msg[0],
-                'messageid': curr_msg[1],
-                'attachmentid': curr_msg[2].split('.')[0],
-                'timestamp': event1["timestamp"],
-                'filename': event1["filename"],
-                'author': event1["author"]
-            }
-            if "Item" in get_key:
-                response = table.update_item(
-                        Key={
-                            "keyword": j["Text"]
-                        },
-                        UpdateExpression="set files=list_append(files, :newfile)",
-                        ExpressionAttributeValues={ 
-                            ':newfile': [newentry]
-                    
-                        },
-                        ReturnValues="UPDATED_NEW"
-                    )
-            else:
-                response = table.put_item(
-                        Item = {
-                            'keyword': j["Text"],
-                            'files':[newentry]
-                        }
-                    )
-            print(j['Text'])
+    
+    print(">>>> Connecting to YugabyteDB!")
+
+    try:
+        if config['sslMode'] != '':
+            yb = psycopg2.connect(host=config['host'], port=config['port'], database=config['dbName'],
+                                  user=config['dbUser'], password=config['dbPassword'],
+                                  sslmode=config['sslMode'], sslrootcert=config['sslRootCert'],
+                                  connect_timeout=10)
+        else:
+            yb = psycopg2.connect(host=config['host'], port=config['port'], database=config['dbName'],
+                                  user=config['dbUser'], password=config['dbPassword'],
+                                  connect_timeout=10)
+    except Exception as e:
+        print("Exception while connecting to YugabyteDB")
+        print(e)
+        exit(1)
+
+    print(">>>> Successfully connected to YugabyteDB!")
+    # create_database(yb)
+    with yb.cursor() as yb_cursor:
+        curr_msg = event1["s3_key"].split('_')
+        yb_cursor.execute("""
+            INSERT INTO files (channel_id, message_id, attachment_id, timestamp, filename, author)
+            VALUES (%s, %s, %s, %s, %s, %s) RETURNING id
+            """, (
+                curr_msg[0],
+                curr_msg[1],
+                curr_msg[2].split('.')[0],
+                event1["timestamp"],
+                event1["filename"],
+                event1["author"]
+        ))
+        file_id = yb_cursor.fetchone()[0]
+        for j in entities["Entities"]:
+            if j['Score'] > 0.75:
+                
+                # for keyword in keywords:
+                yb_cursor.execute("INSERT INTO keywords (keyword) VALUES (%s) RETURNING id", (j["Text"][0:250],))
+                keyword_id = yb_cursor.fetchone()[0]  # Get the inserted keyword's ID
+        
+                # Associate keyword with the file
+                yb_cursor.execute("INSERT INTO file_keywords (file_id, keyword_id) VALUES (%s, %s)", (file_id, keyword_id))
+            
+                yb.commit()
+    yb.close()
     return {
         'statusCode': 200
     }

@@ -1,1 +1,1 @@
-# LumigoSearch
+# Search for Collaborative Platforms

@@ -2,7 +2,7 @@ import json
 import boto3
 from nacl.signing import VerifyKey
 from nacl.exceptions import BadSignatureError
-import requests
+import urllib3
 import os
 
 lambda_client = boto3.client('lambda')
@@ -83,15 +83,16 @@ def lambda_handler(event, context):
     # Add author of attachment info
     if body.get('data').get('name') == 'sync':
         url = 'https://discord.com/api/v8/channels/' + body.get('channel_id') + '/messages?limit=' + str(body.get('data').get('options')[0]["value"])
-        r = requests.get(url, headers=headers)
-        msgs = json.loads(r.text)
+        http = urllib3.PoolManager()
+        r = http.request("GET" ,url, headers=headers)
+        msgs = json.loads(r.data)
         for i in msgs:
           if len(i["attachments"]):
             bucket_name = 'discordattachments'
             key =  i["channel_id"] + '_' + i["id"] + '_' + i["attachments"][0]["id"] + '.' + i["attachments"][0]["url"].split('.')[-1]
             post_url = create_presigned_post(bucket_name, key)
             sns.publish(
-                    TopicArn = #arn of sns topic,
+                    TopicArn = "arn:aws:sns:us-east-2:673135797624:s3queue",
                     Message = json.dumps({
                     's3_key': key,
                     'attachment_url': i["attachments"][0]["url"],
@@ -115,7 +116,7 @@ def lambda_handler(event, context):
             # )
     elif body.get('data').get('name') == 'search':
         lambda_client.invoke(
-                FunctionName = 'arn:aws:lambda:ap-southeast-1:504846068737:function:SearchHandler',
+                FunctionName = os.environ["SearchHandler"],
                 InvocationType = 'Event',
                 Payload = json.dumps({
                     'query': body.get('data').get('options')[0]["value"],
